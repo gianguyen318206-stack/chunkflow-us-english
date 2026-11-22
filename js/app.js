@@ -1,4 +1,4 @@
-// ChunkFlow US — Main Application Controller
+// ChunkFlow US — Main Application Controller (Audited & Hardened)
 (function () {
   const SRS = window.ChunkFlowSRS;
   const Visuals = window.ChunkFlowVisuals;
@@ -6,7 +6,7 @@
   let currentView = 'today'; // 'today' | 'flashcards' | 'practice' | 'roadmap'
 
   // Flashcard Studio State
-  let deckMode = 'today-unit'; // 'today-unit' | 'due' | 'starred' | 'stage-1'..'stage-7' | 'level-A1'..'level-B2' | 'custom-unit'
+  let deckMode = 'today-unit'; // 'today-unit' | 'due' | 'due-batch' | 'starred' | 'stage-1'..'stage-7' | 'level-A1'..'level-B2' | 'custom-unit'
   let customDeckUnitId = null;
   let activeDeck = [];
   let cardIndex = 0;
@@ -18,6 +18,8 @@
   let practiceIndex = 0;
   let puzzleSelected = [];
   let puzzlePool = [];
+  let clozeChoices = [];
+  let clozeMaskedSentence = '';
   let practiceFeedback = null; // { ok: boolean, message: string }
 
   // Roadmap Filter State
@@ -29,7 +31,8 @@
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   function showToast(msg) {
@@ -54,7 +57,7 @@
     for (let i = 1; i <= 6; i++) {
       bars += `<span class="meter-bar ${i <= stage ? 'filled' : ''}"></span>`;
     }
-    return `<span class="memory-meter" title="Độ ngấm chu kỳ 1-3-5-7-14-30 (${stage}/6)">${bars}</span>`;
+    return `<span class="memory-meter" title="Độ ngấm chu kỳ 1-3-5-7-14-30 (${Math.min(6, stage)}/6)">${bars}</span>`;
   }
 
   function stageLabelText(stage = 0) {
@@ -73,7 +76,7 @@
 
   function nextStagePreview(stage = 0) {
     const nextMap = {
-      0: 'Lên Mốc Ngày 1',
+      0: 'Vào Mốc Ngày 1',
       1: 'Lên Mốc Ngày 3',
       2: 'Lên Mốc Ngày 5',
       3: 'Lên Mốc Ngày 7',
@@ -82,10 +85,9 @@
       6: 'Đạt Mastered 🏆',
       7: 'Giữ Mastered 🏆'
     };
-    return nextMap[stage] || 'Lên Mốc Ngày 1';
+    return nextMap[stage] || 'Vào Mốc Ngày 1';
   }
 
-  // Update Header Navigation Badges & Streak
   function updateHeaderUI() {
     const st = SRS.getState();
     const dueCount = SRS.getDueChunks().length;
@@ -132,17 +134,87 @@
     const units = window.ROADMAP_UNITS || [];
     const dueCards = SRS.getDueChunks();
     const stages = SRS.getStageBreakdown();
+    const simDays = SRS.getSimulatedDayOffset();
 
     const allLearnedCount = Object.values(st.cards || {}).filter(c => c.stage >= 1).length;
     const masteredCount = Object.values(st.cards || {}).filter(c => c.stage >= 7).length;
-    const unitLearnedCount = (unit?.chunks || []).filter(c => (st.cards[c.id]?.stage || 0) >= 1).length;
+    const unitChunks = unit?.chunks || [];
+    const unitLearnedCount = unitChunks.filter(c => (st.cards[c.id]?.stage || 0) >= 1).length;
+    const unitPracticedCount = unitChunks.filter(c => (st.cards[c.id]?.practicedCount || 0) >= 1).length;
+
+    // 3-Step Guided Daily Workflow Status
+    const step1Done = dueCards.length === 0;
+    const step2Done = unitLearnedCount >= unitChunks.length && unitChunks.length > 0;
+    const step3Done = unitPracticedCount >= unitChunks.length && unitChunks.length > 0;
+
+    const guidedStepsHTML = `
+      <section class="daily-steps-grid" aria-label="Lộ trình 3 bước học mỗi ngày">
+        <div class="step-card ${step1Done ? 'step-done' : 'step-active'}">
+          <div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+              <span class="step-badge">${step1Done ? '✓ Bước 1 Hoàn tất' : '● Bước 1 Cần làm'}</span>
+              <span style="font-size:12px;font-weight:700;">Chu kỳ 1-3-5-7-14-30</span>
+            </div>
+            <div style="font-size:16px;font-weight:800;">1. Ôn thẻ cũ tới hạn hôm nay</div>
+            <div style="font-size:13px;color:var(--text-secondary);margin-top:2px;">
+              ${step1Done ? 'Không có thẻ cũ tồn đọng. Sẵn sàng học cụm mới!' : `Bạn có <b>${dueCards.length} thẻ</b> đến lịch ôn tập hôm nay.`}
+            </div>
+          </div>
+          <div>
+            ${step1Done
+              ? `<button class="btn btn-secondary btn-sm" onclick="window.App.startFlashcardDeck('due')">Xem lịch thẻ sắp ôn</button>`
+              : `<button class="btn btn-primary btn-sm" onclick="window.App.startFlashcardDeck('due')">⏰ Ôn ngay ${dueCards.length} thẻ tới hạn →</button>`
+            }
+          </div>
+        </div>
+
+        <div class="step-card ${step2Done ? 'step-done' : (step1Done ? 'step-active' : '')}">
+          <div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+              <span class="step-badge">${step2Done ? '✓ Bước 2 Hoàn tất' : '● Bước 2 Trọng tâm'}</span>
+              <span style="font-size:12px;font-weight:700;">${unitLearnedCount}/6 cụm</span>
+            </div>
+            <div style="font-size:16px;font-weight:800;">2. Lật Flashcard Hình Ảnh 6 cụm mới</div>
+            <div style="font-size:13px;color:var(--text-secondary);margin-top:2px;">
+              Nghe giọng Mỹ, lật mặt sau xem hình ảnh trực quan & nạp vào Mốc Ngày 1.
+            </div>
+          </div>
+          <div>
+            <button class="btn ${step2Done ? 'btn-secondary' : 'btn-primary'} btn-sm" onclick="window.App.startFlashcardDeck('today-unit')">
+              🃏 ${step2Done ? 'Xem lại 6 thẻ hôm nay' : 'Học Flashcard 6 cụm hôm nay →'}
+            </button>
+          </div>
+        </div>
+
+        <div class="step-card ${step3Done ? 'step-done' : (step2Done ? 'step-active' : '')}">
+          <div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+              <span class="step-badge">${step3Done ? '✓ Bước 3 Hoàn tất' : '● Bước 3 Khóa trí nhớ'}</span>
+              <span style="font-size:12px;font-weight:700;">${unitPracticedCount}/6 cụm</span>
+            </div>
+            <div style="font-size:16px;font-weight:800;">3. Luyện ghép mảnh & điền câu</div>
+            <div style="font-size:13px;color:var(--text-secondary);margin-top:2px;">
+              Ghép từ xáo trộn & điền câu ngữ cảnh để thuộc ngay 6 cụm trong ngày.
+            </div>
+          </div>
+          <div>
+            <button class="btn ${step2Done && !step3Done ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="window.App.startPracticeForCurrentUnit()">
+              ⚡ Luyện nhớ nhanh 6 cụm này →
+            </button>
+          </div>
+        </div>
+      </section>
+    `;
 
     const stageBoxesHTML = Object.values(stages).map(s => `
       <div class="srs-stage-box ${s.dueCount > 0 ? 'has-due' : ''}" onclick="window.App.openStageDeck(${s.stage})" title="${escapeHTML(s.desc)}">
         <div class="srs-stage-day">${escapeHTML(s.label)}</div>
         <div class="srs-stage-count">${s.cards.length}</div>
         <div class="srs-stage-meta">cụm đang ở mốc này</div>
-        ${s.dueCount > 0 ? `<span class="due-pill">Cần ôn: ${s.dueCount}</span>` : ''}
+        ${s.dueCount > 0
+          ? `<span class="due-pill">Cần ôn: ${s.dueCount}</span>`
+          : (s.cards.length > 0 && s.stage < 7 ? `<span style="display:inline-block;margin-top:6px;font-size:11px;font-weight:700;color:var(--brand-primary);">Chu kỳ ${s.days} ngày</span>` : '')
+        }
       </div>
     `).join('');
 
@@ -159,19 +231,20 @@
       </div>
     ` : '';
 
-    const todayChunksHTML = (unit?.chunks || []).map((c, idx) => {
+    const todayChunksHTML = unitChunks.map((c, idx) => {
       const cardSt = st.cards[c.id] || { stage: 0 };
+      const dueText = cardSt.stage >= 1 ? SRS.formatDaysUntilDue(cardSt.dueAt) : 'Chưa nạp vào chu kỳ';
       return `
         <article class="chunk-item-card">
           <div>
             <div class="chunk-top-row">
-              <div style="display:flex;align-items:center;gap:6px;">
+              <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
                 <span class="level-tag level-${c.level}">${c.level} • Cụm #${idx + 1}/6</span>
-                <span style="font-size:12px;color:var(--text-muted);font-weight:600;">${escapeHTML(stageLabelText(cardSt.stage))}</span>
+                <span style="font-size:12px;color:var(--brand-primary);font-weight:700;">${escapeHTML(stageLabelText(cardSt.stage))}</span>
               </div>
               <div style="display:flex;align-items:center;gap:8px;">
                 ${renderMemoryMeterHTML(cardSt.stage)}
-                <button class="btn btn-ghost btn-sm" onclick="window.App.speak('${escapeHTML(c.chunk)}', 0.96)" title="Nghe phát âm chuẩn Anh-Mỹ">🔊 US</button>
+                <button class="btn btn-ghost btn-sm" data-speak="${escapeHTML(c.chunk)}" title="Nghe phát âm chuẩn Anh-Mỹ">🔊 US</button>
               </div>
             </div>
             <div class="chunk-phrase">${Visuals.formatChunkAnatomyHTML(c.chunk)}</div>
@@ -181,7 +254,7 @@
           <div>
             <div class="chunk-example">“${escapeHTML(c.example)}”</div>
             <div style="display:flex;align-items:center;justify-content:space-between;margin-top:10px;">
-              <span style="font-size:12px;color:var(--text-muted);">${c.sceneIcon || '🖼️'} Có thẻ hình ảnh mặt sau</span>
+              <span style="font-size:12px;color:var(--text-muted);">${c.sceneIcon || '🖼️'} ${escapeHTML(dueText)}</span>
               <button class="btn btn-secondary btn-sm" onclick="window.App.openSingleCardInStudio('${c.id}')">🃏 Lật thẻ này</button>
             </div>
           </div>
@@ -204,6 +277,8 @@
           <button class="btn btn-secondary" onclick="window.App.openAddChunkDialog()">➕ Tự thêm cụm từ mới</button>
         </div>
       </section>
+
+      ${guidedStepsHTML}
 
       <section class="kpi-grid">
         <div class="kpi-card">
@@ -233,7 +308,7 @@
         <div class="kpi-card">
           <div>
             <div class="kpi-label">Bảo vệ tiến độ (Zero-Login)</div>
-            <div class="kpi-value" style="font-size:16px;">${SRS.isDiskLinked() ? '🟢 Đang đồng bộ ổ đĩa' : ' Tự động lưu trên máy'}</div>
+            <div class="kpi-value" style="font-size:16px;">${SRS.isDiskLinked() ? '🟢 Đang đồng bộ ổ đĩa' : 'Tự động lưu trên máy'}</div>
             <div class="kpi-sub">
               <button class="btn btn-ghost btn-sm" style="padding:2px 6px;" onclick="window.App.linkDiskFile()">💾 Liên kết file ổ đĩa</button>
               •
@@ -247,7 +322,10 @@
       <section class="section-card">
         <div class="section-header">
           <div>
-            <h2 class="section-title">🔄 Radar Chu Kỳ Lặp Lại 1 – 3 – 5 – 7 – 14 – 30 Ngày</h2>
+            <h2 class="section-title">
+              <span>🔄 Radar Chu Kỳ Lặp Lại 1 – 3 – 5 – 7 – 14 – 30 Ngày</span>
+              ${simDays > 0 ? `<span class="due-pill">Đang mô phỏng: +${simDays} ngày sau</span>` : ''}
+            </h2>
             <p style="margin:4px 0 0;font-size:13.5px;color:var(--text-secondary);">Bấm vào bất kỳ mốc ngày nào để mở bộ thẻ Flashcard đang nằm ở mốc đó.</p>
           </div>
           ${dueCards.length > 0 ? `<button class="btn btn-primary btn-sm" onclick="window.App.startFlashcardDeck('due')">Ôn ${dueCards.length} thẻ đến hạn →</button>` : ''}
@@ -256,6 +334,20 @@
         <div class="srs-pipeline">
           ${stageBoxesHTML}
         </div>
+
+        <details style="margin-top:14px;font-size:13px;color:var(--text-secondary);">
+          <summary style="cursor:pointer;font-weight:700;">🧪 Công cụ kiểm thử nhanh Chu kỳ 1–3–5–7–14–30 (Mô phỏng tua thời gian)</summary>
+          <div style="margin-top:10px;padding:12px;background:var(--bg-subtle);border-radius:12px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+            <span>Muốn kiểm tra xem các thẻ bạn vừa nạp vào <b>Mốc Ngày 1, 3, 5, 7</b> sẽ tự động báo "Cần ôn" như thế nào vào các ngày sau? Hãy bấm tua thử đồng hồ:</span>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+              <button class="btn btn-secondary btn-sm" onclick="window.App.simulateTimeOffset(0)">Giờ thực tế (Hôm nay)</button>
+              <button class="btn btn-secondary btn-sm" onclick="window.App.simulateTimeOffset(1)">+1 Ngày (Test Mốc 1)</button>
+              <button class="btn btn-secondary btn-sm" onclick="window.App.simulateTimeOffset(3)">+3 Ngày (Test Mốc 3)</button>
+              <button class="btn btn-secondary btn-sm" onclick="window.App.simulateTimeOffset(5)">+5 Ngày (Test Mốc 5)</button>
+              <button class="btn btn-secondary btn-sm" onclick="window.App.simulateTimeOffset(7)">+7 Ngày (Test Mốc 7)</button>
+            </div>
+          </div>
+        </details>
       </section>
 
       <section class="section-card">
@@ -298,10 +390,8 @@
       activeDeck = targetU ? [...targetU.chunks] : [...(unit?.chunks || [])];
     } else if (deckMode === 'due') {
       activeDeck = SRS.getDueChunks();
-      if (!activeDeck.length) activeDeck = [...(unit?.chunks || [])];
     } else if (deckMode === 'due-batch') {
       activeDeck = SRS.getDueChunks().slice(0, 6);
-      if (!activeDeck.length) activeDeck = [...(unit?.chunks || [])];
     } else if (deckMode === 'starred') {
       const errIds = new Set(Object.keys(st.errorLog || {}));
       activeDeck = all.filter(c => st.cards[c.id]?.starred || errIds.has(c.id));
@@ -320,14 +410,47 @@
   }
 
   function renderFlashcardsView() {
+    const dueCount = SRS.getDueChunks().length;
+    const stages = SRS.getStageBreakdown();
+
+    const toolbarHTML = `
+      <div class="studio-toolbar">
+        <div class="mode-chips">
+          <button class="chip-btn ${deckMode === 'today-unit' ? 'active' : ''}" onclick="window.App.startFlashcardDeck('today-unit')">📦 6 Cụm Hôm Nay</button>
+          <button class="chip-btn ${deckMode === 'due' ? 'active' : ''}" onclick="window.App.startFlashcardDeck('due')">⏰ Tới hạn ôn (${dueCount})</button>
+          <button class="chip-btn ${deckMode === 'starred' ? 'active' : ''}" onclick="window.App.startFlashcardDeck('starred')">⭐ Cụm hay quên</button>
+          <button class="chip-btn ${deckMode === 'level-A1' ? 'active' : ''}" onclick="window.App.startFlashcardDeck('level-A1')">A1</button>
+          <button class="chip-btn ${deckMode === 'level-A2' ? 'active' : ''}" onclick="window.App.startFlashcardDeck('level-A2')">A2</button>
+          <button class="chip-btn ${deckMode === 'level-B1' ? 'active' : ''}" onclick="window.App.startFlashcardDeck('level-B1')">B1</button>
+          <button class="chip-btn ${deckMode === 'level-B2' ? 'active' : ''}" onclick="window.App.startFlashcardDeck('level-B2')">B2</button>
+        </div>
+        <div style="font-size:13.5px;font-weight:700;color:var(--text-secondary);">
+          ${activeDeck.length ? `Thẻ ${cardIndex + 1} / ${activeDeck.length}` : '0 thẻ'}
+        </div>
+      </div>
+    `;
+
     if (!activeDeck || activeDeck.length === 0) {
+      const stage1Count = stages[1]?.cards.length || 0;
       return `
         <div class="flashcard-studio-wrap">
-          <div class="section-card" style="text-align:center;padding:48px 24px;">
+          ${toolbarHTML}
+          <div class="section-card" style="text-align:center;padding:44px 24px;">
             <div style="font-size:44px;margin-bottom:12px;">🎉</div>
-            <h2 style="margin:0 0 8px;">Không có thẻ nào trong bộ lọc này!</h2>
-            <p style="color:var(--text-secondary);margin:0 0 20px;">Bạn có thể chuyển sang học gói 6 cụm mới của hôm nay hoặc chọn theo chặng A1–B2.</p>
-            <button class="btn btn-primary" onclick="window.App.startFlashcardDeck('today-unit')">🃏 Mở 6 Cụm Hôm Nay</button>
+            <h2 style="margin:0 0 8px;">
+              ${deckMode === 'due' ? 'Bạn đã hoàn thành hết thẻ tới hạn ôn của hôm nay!' : 'Chưa có thẻ nào trong bộ lọc này!'}
+            </h2>
+            <p style="color:var(--text-secondary);margin:0 auto 20px;max-width:520px;">
+              ${deckMode === 'due'
+                ? `Các thẻ bạn học hôm nay đã được hẹn lịch ôn vào ngày mai (Mốc Ngày 1 hiện có <b>${stage1Count} thẻ</b>). Bạn có thể học Gói 6 cụm mới hôm nay, ôn sớm Mốc Ngày 1, hoặc bấm "+1 Ngày" để test chu kỳ ôn tập!`
+                : 'Hãy bắt đầu với Gói 6 cụm mới của hôm nay hoặc đánh dấu ⭐ những cụm từ bạn muốn chú ý.'
+              }
+            </p>
+            <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
+              <button class="btn btn-primary" onclick="window.App.startFlashcardDeck('today-unit')">🃏 Mở 6 Cụm Hôm Nay</button>
+              ${stage1Count > 0 ? `<button class="btn btn-secondary" onclick="window.App.openStageDeck(1)">🔄 Ôn sớm ${stage1Count} thẻ ở Mốc Ngày 1</button>` : ''}
+              ${deckMode === 'due' && stage1Count > 0 ? `<button class="btn btn-secondary" onclick="window.App.simulateTimeOffset(1)">⏩ Mô phỏng qua Ngày mai (+1 Ngày)</button>` : ''}
+            </div>
           </div>
         </div>
       `;
@@ -336,8 +459,8 @@
     const card = activeDeck[Math.min(cardIndex, activeDeck.length - 1)];
     const st = SRS.getState();
     const cardState = st.cards[card.id] || { stage: 0, mySentence: '', customImage: '', starred: false };
-    const dueCount = SRS.getDueChunks().length;
     const displayPhoto = cardState.customImage || card.photoUrl;
+    const dueScheduleLabel = cardState.stage >= 1 ? SRS.formatDaysUntilDue(cardState.dueAt) : 'Đánh giá thẻ để đưa vào Mốc Ngày 1';
 
     const slotsHTML = (card.slots || []).map(slot => {
       const sampleCombined = card.chunk
@@ -345,7 +468,7 @@
         .replace(/for something/i, 'for ' + slot)
         .replace(/something/i, slot)
         .replace(/someone/i, slot);
-      return `<button class="slot-chip" onclick="event.stopPropagation(); window.App.speak('${escapeHTML(sampleCombined)}', 0.95)" title="Bấm để nghe ghép thử cụm với '${escapeHTML(slot)}'">🔊 + ${escapeHTML(slot)}</button>`;
+      return `<button class="slot-chip" data-speak="${escapeHTML(sampleCombined)}" title="Bấm để nghe ghép thử cụm với '${escapeHTML(slot)}'">🔊 + ${escapeHTML(slot)}</button>`;
     }).join('');
 
     const examplesHTML = (card.examples || [{ en: card.example, tag: 'Câu ví dụ' }]).map(ex => `
@@ -354,26 +477,13 @@
           <span class="example-tag">${escapeHTML(ex.tag || 'Ngữ cảnh Anh-Mỹ')}</span>
           <div>“${escapeHTML(ex.en)}”</div>
         </div>
-        <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation(); window.App.speak('${escapeHTML(ex.en)}', 0.96)" title="Nghe câu này">🔊</button>
+        <button class="btn btn-ghost btn-sm" data-speak="${escapeHTML(ex.en)}" title="Nghe câu này">🔊</button>
       </div>
     `).join('');
 
     return `
       <div class="flashcard-studio-wrap">
-        <div class="studio-toolbar">
-          <div class="mode-chips">
-            <button class="chip-btn ${deckMode === 'today-unit' ? 'active' : ''}" onclick="window.App.startFlashcardDeck('today-unit')">📦 6 Cụm Hôm Nay</button>
-            <button class="chip-btn ${deckMode === 'due' ? 'active' : ''}" onclick="window.App.startFlashcardDeck('due')">⏰ Tới hạn ôn (${dueCount})</button>
-            <button class="chip-btn ${deckMode === 'starred' ? 'active' : ''}" onclick="window.App.startFlashcardDeck('starred')">⭐ Cụm hay quên</button>
-            <button class="chip-btn ${deckMode === 'level-A1' ? 'active' : ''}" onclick="window.App.startFlashcardDeck('level-A1')">A1</button>
-            <button class="chip-btn ${deckMode === 'level-A2' ? 'active' : ''}" onclick="window.App.startFlashcardDeck('level-A2')">A2</button>
-            <button class="chip-btn ${deckMode === 'level-B1' ? 'active' : ''}" onclick="window.App.startFlashcardDeck('level-B1')">B1</button>
-            <button class="chip-btn ${deckMode === 'level-B2' ? 'active' : ''}" onclick="window.App.startFlashcardDeck('level-B2')">B2</button>
-          </div>
-          <div style="font-size:13.5px;font-weight:700;color:var(--text-secondary);">
-            Thẻ ${cardIndex + 1} / ${activeDeck.length}
-          </div>
-        </div>
+        ${toolbarHTML}
 
         <div class="flashcard-stage">
           <div class="flashcard-3d ${isFlipped ? 'is-flipped' : ''}" id="flashcard3D">
@@ -398,8 +508,8 @@
                 <div class="front-ipa">${escapeHTML(card.ipa)}</div>
 
                 <div class="audio-controls" onclick="event.stopPropagation()">
-                  <button class="btn btn-primary btn-sm" onclick="window.App.speak('${escapeHTML(card.chunk)}', 0.96)">🔊 Giọng Mỹ chuẩn (1.0x)</button>
-                  <button class="btn btn-secondary btn-sm" onclick="window.App.speak('${escapeHTML(card.chunk)}', 0.72)">🐢 Đọc chậm rõ âm (0.75x)</button>
+                  <button class="btn btn-primary btn-sm" data-speak="${escapeHTML(card.chunk)}" data-rate="0.96">🔊 Giọng Mỹ chuẩn (1.0x)</button>
+                  <button class="btn btn-secondary btn-sm" data-speak="${escapeHTML(card.chunk)}" data-rate="0.72">🐢 Đọc chậm rõ âm (0.75x)</button>
                 </div>
 
                 <div>
@@ -409,8 +519,8 @@
                 </div>
               </div>
 
-              <div style="display:flex;align-items:center;justify-content:space-between;border-top:1px solid var(--border-subtle);padding-top:14px;font-size:13px;color:var(--text-muted);">
-                <span>💡 Nhẩm nghĩa & đặt thử 1 câu trước khi lật thẻ</span>
+              <div style="display:flex;align-items:center;justify-content:space-between;border-top:1px solid var(--border-subtle);padding-top:14px;font-size:13px;color:var(--text-muted);flex-wrap:wrap;gap:8px;">
+                <span>⏱️ ${escapeHTML(dueScheduleLabel)}</span>
                 <span style="font-weight:700;color:var(--brand-primary);">Bấm vào thẻ hoặc ấn Space để xem Hình ảnh mặt sau ↻</span>
               </div>
             </div>
@@ -419,10 +529,10 @@
             <div class="card-face card-back">
               <div>
                 <div class="chunk-top-row" style="margin-bottom:10px;">
-                  <div style="display:flex;align-items:center;gap:8px;">
+                  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                     <span class="level-tag level-${card.level}">${card.level}</span>
                     <strong style="font-size:16px;">${escapeHTML(card.chunk)}</strong>
-                    <button class="btn btn-ghost btn-sm" onclick="window.App.speak('${escapeHTML(card.chunk)}', 0.96)">🔊</button>
+                    <button class="btn btn-ghost btn-sm" data-speak="${escapeHTML(card.chunk)}" title="Nghe cụm từ">🔊</button>
                   </div>
                   <button class="btn btn-secondary btn-sm" onclick="window.App.flipCard()">↺ Lật lại mặt trước</button>
                 </div>
@@ -439,6 +549,10 @@
                     <div style="display:none;width:100%;height:100%;">${Visuals.generateInstantSceneSVG(card)}</div>
                   ` : Visuals.generateInstantSceneSVG(card)}
 
+                  <div class="visual-anchor-badge" title="Khung công thức ghi nhớ nhanh">
+                    ${card.sceneIcon || '🎯'} ${escapeHTML(card.formula || card.chunk)}
+                  </div>
+
                   <div class="visual-actions-overlay">
                     <button class="visual-btn" onclick="window.App.cycleCardPhoto('${card.id}')" title="Đổi hình minh họa khác">🖼️ Đổi ảnh</button>
                     <button class="visual-btn" onclick="window.App.promptCustomImage('${card.id}')" title="Dán link ảnh hoặc bấm Ctrl+V">📋 Dán ảnh (Ctrl+V)</button>
@@ -450,7 +564,7 @@
 
                   <div class="visual-caption-bar">
                     <span>${card.sceneIcon || '🖼️'} ${escapeHTML(card.sceneCaption || 'Hình ảnh liên tưởng ngữ cảnh')}</span>
-                    <span style="opacity:0.85;">Dual-Coding Visual Memory</span>
+                    <span style="opacity:0.9;font-weight:700;">“${escapeHTML(card.meaning)}”</span>
                   </div>
                 </div>
 
@@ -515,9 +629,12 @@
           </button>
         </div>
 
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-top:16px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-top:16px;flex-wrap:wrap;gap:8px;">
           <button class="btn btn-secondary btn-sm" onclick="window.App.moveCard(-1)">← Thẻ trước</button>
-          <button class="btn btn-ghost btn-sm" onclick="window.App.switchView('practice', { chunks: activeDeck })">⚡ Chuyển bộ thẻ này sang Phòng Luyện Nhớ Nhanh →</button>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button class="btn btn-ghost btn-sm" onclick="window.App.rateCurrentCard('easy', true)" title="Dành cho cụm bạn đã thuộc lòng từ trước, muốn nhảy thẳng lên mốc cao hơn ngay lập tức">⚡ Đã thuộc sẵn (Tăng mốc ngay)</button>
+            <button class="btn btn-ghost btn-sm" onclick="window.App.switchView('practice', { chunks: activeDeck })">⚡ Chuyển sang Phòng Luyện Nhớ Nhanh →</button>
+          </div>
           <button class="btn btn-secondary btn-sm" onclick="window.App.moveCard(1)">Thẻ tiếp theo →</button>
         </div>
       </div>
@@ -527,6 +644,32 @@
   // =========================================================
   // VIEW 3: ⚡ PHÒNG LUYỆN NHỚ NHANH (ACTIVE RECALL CHO CỤM DÀI)
   // =========================================================
+  function buildClozeMaskedSentence(chunk, example) {
+    let masked = String(example || '');
+    const cleanChunk = chunk.replace(/\b(something|someone|somebody|doing)\b/gi, '').trim();
+    const tokens = cleanChunk.split(/\s+/).filter(Boolean);
+
+    tokens.forEach(tok => {
+      const cleanTok = tok.replace(/[.,?!]/g, '');
+      if (!cleanTok) return;
+      if (cleanTok.toLowerCase() === 'be') {
+        masked = masked.replace(/\b(am|is|are|was|were|be|been)\b/i, '___');
+      } else if (cleanTok.toLowerCase() === 'my') {
+        masked = masked.replace(/\b(my|your|our|their|his|her)\b/i, '___');
+      } else {
+        const reg = new RegExp(`\\b${cleanTok.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\w*\\b`, 'i');
+        masked = masked.replace(reg, '___');
+      }
+    });
+
+    // Collapse consecutive blanks into a clean chunk blank
+    masked = masked.replace(/(___[\s,]*)+/g, '[ __________ ]');
+    if (!masked.includes('[ __________ ]')) {
+      masked = `${masked}  👉 [ __________ ]`;
+    }
+    return masked;
+  }
+
   function buildPracticeSession(customChunks = null) {
     const unit = getActiveUnit();
     const due = SRS.getDueChunks();
@@ -545,12 +688,22 @@
     practiceFeedback = null;
     if (!practiceDeck.length) return;
     const item = practiceDeck[Math.min(practiceIndex, practiceDeck.length - 1)];
-    // Split long chunk into word tokens for Chunk Puzzle
+
+    // 1. Prepare Puzzle tokens
     const words = item.chunk.trim().split(/\s+/);
     puzzleSelected = [];
     puzzlePool = words
       .map((w, idx) => ({ id: idx, word: w }))
       .sort(() => Math.random() - 0.5);
+
+    // 2. Prepare Cloze masked sentence & stable shuffled choices
+    clozeMaskedSentence = buildClozeMaskedSentence(item.chunk, item.example);
+    const distractors = (SRS.getAllChunks() || [])
+      .filter(c => c.id !== item.id && c.level === item.level)
+      .slice(0, 24)
+      .sort(() => Math.random() - 0.5)
+      .slice(0, 3);
+    clozeChoices = [item, ...distractors].sort(() => Math.random() - 0.5);
   }
 
   function renderPracticeView() {
@@ -559,24 +712,6 @@
     const st = SRS.getState();
     const cardState = st.cards[item.id] || { stage: 0 };
     const displayPhoto = cardState.customImage || item.photoUrl;
-
-    // Cloze sentence: mask the chunk keywords inside the primary example
-    const words = item.chunk.replace(/\b(something|someone|doing)\b/gi, '').trim().split(/\s+/).filter(Boolean);
-    let maskedExample = item.example;
-    words.forEach(w => {
-      if (w.length > 2) {
-        const reg = new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\w*\\b`, 'i');
-        maskedExample = maskedExample.replace(reg, '_____');
-      }
-    });
-
-    // Distractor options for Cloze mode
-    const otherChunks = (SRS.getAllChunks() || [])
-      .filter(c => c.id !== item.id && c.level === item.level)
-      .slice(0, 15)
-      .sort(() => Math.random() - 0.5)
-      .slice(0, 3);
-    const clozeChoices = [item, ...otherChunks].sort((a, b) => a.id.localeCompare(b.id));
 
     let bodyHTML = '';
     if (practiceMode === 'puzzle') {
@@ -594,7 +729,7 @@
         <div style="text-align:center;margin-bottom:14px;">
           <div style="font-size:12.5px;font-weight:700;color:var(--brand-primary);text-transform:uppercase;">🧩 Ghép các từ bên dưới thành cụm từ dài hoàn chỉnh</div>
           <h3 style="font-size:22px;margin:6px 0;">“${escapeHTML(item.meaning)}”</h3>
-          <div style="font-size:13px;color:var(--text-secondary);">Khung gợi ý: ${escapeHTML(item.formula || '')}</div>
+          <div style="font-size:13px;color:var(--text-secondary);">Phiên âm: ${escapeHTML(item.ipa)}</div>
         </div>
 
         <div class="puzzle-word-bank" style="border:2px dashed var(--brand-primary);justify-content:center;align-items:center;">
@@ -611,7 +746,7 @@
           <div style="font-size:12.5px;font-weight:700;color:var(--brand-primary);text-transform:uppercase;">✍️ Chọn cụm từ dài phù hợp với ngữ cảnh và nghĩa</div>
           <h3 style="font-size:20px;margin:8px 0;">Nghĩa cần diễn đạt: “${escapeHTML(item.meaning)}”</h3>
           <div class="chunk-example" style="display:inline-block;font-size:16px;margin-top:8px;">
-            “${escapeHTML(maskedExample)}”
+            “${escapeHTML(clozeMaskedSentence)}”
           </div>
         </div>
 
@@ -624,7 +759,6 @@
         </div>
       `;
     } else {
-      // Visual Active Typing Recall
       bodyHTML = `
         <div style="text-align:center;margin-bottom:16px;">
           <div style="font-size:12.5px;font-weight:700;color:var(--brand-primary);text-transform:uppercase;">🎯 Nhìn Hình Ảnh & Nghĩa → Gõ lại cả cụm từ dài</div>
@@ -697,7 +831,6 @@
     const units = window.ROADMAP_UNITS || [];
     const allChunks = SRS.getAllChunks();
 
-    // Calculate progress per CEFR level
     const levels = ['A1', 'A2', 'B1', 'B2'].map(lvl => {
       const lvlChunks = allChunks.filter(c => c.level === lvl);
       const learned = lvlChunks.filter(c => (st.cards[c.id]?.stage || 0) >= 1).length;
@@ -751,7 +884,7 @@
                 <div>
                   <div class="chunk-top-row">
                     <span class="level-tag level-${c.level}">${c.level} • ${escapeHTML(stageLabelText(cardSt.stage))}</span>
-                    <button class="btn btn-ghost btn-sm" onclick="window.App.speak('${escapeHTML(c.chunk)}', 0.96)">🔊 US</button>
+                    <button class="btn btn-ghost btn-sm" data-speak="${escapeHTML(c.chunk)}">🔊 US</button>
                   </div>
                   <div class="chunk-phrase">${Visuals.formatChunkAnatomyHTML(c.chunk)}</div>
                   <div class="chunk-ipa">${escapeHTML(c.ipa)}</div>
@@ -871,6 +1004,19 @@
     switchView,
     speak: (text, rate = 0.96) => Visuals.speakAmerican(text, rate),
 
+    simulateTimeOffset: (days) => {
+      const d = SRS.setSimulatedDayOffset(days);
+      const dueCount = SRS.getDueChunks().length;
+      showToast(d === 0
+        ? '⏱️ Đã quay về thời gian thực tế hôm nay!'
+        : `⏩ Đang mô phỏng sau +${d} ngày: Có ${dueCount} thẻ đến hạn ôn!`);
+      if (currentView === 'flashcards' && deckMode === 'due') {
+        buildFlashcardDeck();
+      }
+      updateHeaderUI();
+      renderWorkspace();
+    },
+
     stepUnit: (delta) => {
       const units = window.ROADMAP_UNITS || [];
       const cur = getActiveUnit();
@@ -951,25 +1097,32 @@
       renderWorkspace();
     },
 
-    rateCurrentCard: (rating) => {
+    rateCurrentCard: (rating, forceAdvance = false) => {
       if (!activeDeck.length) return;
       const card = activeDeck[cardIndex];
-      const updated = SRS.rateChunk(card.id, rating);
+      const prevStage = SRS.getCardState(card.id)?.stage || 0;
+      const updated = SRS.rateChunk(card.id, rating, { forceAdvance });
 
-      const msgMap = {
-        forgot: `🔴 Đã đưa "${card.chunk}" về Mốc Ngày 1 & Sổ tay hay quên`,
-        hesitant: `🟡 Đã hẹn ngày mai nhắc lại "${card.chunk}" (${stageLabelText(updated.stage)})`,
-        easy: `🟢 Tuyệt vời! "${card.chunk}" đã lên ${stageLabelText(updated.stage)}`
-      };
-      showToast(msgMap[rating] || 'Đã lưu tiến độ thẻ!');
+      let msg = '';
+      if (rating === 'forgot') {
+        msg = `🔴 Đã đưa "${card.chunk}" về Mốc Ngày 1 & Sổ tay hay quên`;
+      } else if (rating === 'hesitant') {
+        msg = `🟡 Đã hẹn ngày mai nhắc lại "${card.chunk}" (${stageLabelText(updated.stage)})`;
+      } else if (updated.stage > prevStage) {
+        msg = `🟢 Tuyệt vời! "${card.chunk}" đã lên ${stageLabelText(updated.stage)} (${SRS.formatDaysUntilDue(updated.dueAt)})`;
+      } else {
+        msg = `🟢 Đã ghi nhận ôn củng cố "${card.chunk}" ở ${stageLabelText(updated.stage)} (${SRS.formatDaysUntilDue(updated.dueAt)})`;
+      }
+      showToast(msg);
 
       if (cardIndex < activeDeck.length - 1) {
         cardIndex++;
         isFlipped = false;
+        updateHeaderUI();
         renderWorkspace();
       } else {
         isFlipped = false;
-        showToast('🎉 Bạn đã hoàn thành lượt thẻ này! Hãy luyện ghép cụm để khóa trí nhớ.');
+        showToast('🎉 Bạn đã hoàn thành lượt thẻ này! Hãy sang Bước 3 (Luyện Nhớ Nhanh) để khóa trí nhớ.');
         updateHeaderUI();
         renderWorkspace();
       }
@@ -1044,12 +1197,13 @@
         const isCorrect = userPhrase.toLowerCase() === item.chunk.trim().toLowerCase();
         if (isCorrect) {
           Visuals.speakAmerican(item.chunk, 0.96);
-          SRS.rateChunk(item.id, 'easy');
-          practiceFeedback = { ok: true, message: `"${item.chunk}" — Đã tự động cập nhật vào chu kỳ 1-3-5-7!` };
+          const cardSt = SRS.rateChunk(item.id, 'easy', { fromPractice: true });
+          practiceFeedback = { ok: true, message: `"${item.chunk}" — Đã khóa trí nhớ ở ${stageLabelText(cardSt.stage)} (${SRS.formatDaysUntilDue(cardSt.dueAt)})!` };
         } else {
-          SRS.rateChunk(item.id, 'forgot');
+          SRS.rateChunk(item.id, 'forgot', { fromPractice: true });
           practiceFeedback = { ok: false, message: `Đáp án đúng là: "${item.chunk}"` };
         }
+        updateHeaderUI();
       }
       renderWorkspace();
     },
@@ -1064,12 +1218,13 @@
       const item = practiceDeck[practiceIndex];
       if (chosenId === item.id) {
         Visuals.speakAmerican(item.example, 0.96);
-        SRS.rateChunk(item.id, 'easy');
-        practiceFeedback = { ok: true, message: `"${item.chunk}" (${item.meaning}) — Đã cộng tiến độ 1-3-5-7!` };
+        const cardSt = SRS.rateChunk(item.id, 'easy', { fromPractice: true });
+        practiceFeedback = { ok: true, message: `"${item.chunk}" (${item.meaning}) — Đã ghi nhận ở ${stageLabelText(cardSt.stage)}!` };
       } else {
-        SRS.rateChunk(item.id, 'forgot');
+        SRS.rateChunk(item.id, 'forgot', { fromPractice: true });
         practiceFeedback = { ok: false, message: `Cụm đúng phải là "${item.chunk}" (${item.meaning}).` };
       }
+      updateHeaderUI();
       renderWorkspace();
     },
 
@@ -1077,16 +1232,17 @@
       const input = document.getElementById('typingRecallInput');
       if (!input) return;
       const item = practiceDeck[practiceIndex];
-      const cleanUser = input.value.trim().toLowerCase().replace(/\s+/g, ' ');
-      const cleanTarget = item.chunk.trim().toLowerCase().replace(/\s+/g, ' ');
+      const cleanUser = input.value.trim().toLowerCase().replace(/[.,?!]/g, '').replace(/\s+/g, ' ');
+      const cleanTarget = item.chunk.trim().toLowerCase().replace(/[.,?!]/g, '').replace(/\s+/g, ' ');
 
       if (cleanUser === cleanTarget) {
         Visuals.speakAmerican(item.chunk, 0.96);
-        SRS.rateChunk(item.id, 'easy');
-        practiceFeedback = { ok: true, message: `Xuất sắc! "${item.chunk}" đã được thăng hạng trong chu kỳ 1-3-5-7-14-30.` };
+        const cardSt = SRS.rateChunk(item.id, 'easy', { fromPractice: true });
+        practiceFeedback = { ok: true, message: `Xuất sắc! "${item.chunk}" đang ở ${stageLabelText(cardSt.stage)} (${SRS.formatDaysUntilDue(cardSt.dueAt)}).` };
       } else {
         practiceFeedback = { ok: false, message: `Cụm chuẩn là: "${item.chunk}"` };
       }
+      updateHeaderUI();
       renderWorkspace();
     },
 
@@ -1142,7 +1298,7 @@
       if (created) {
         document.getElementById('addChunkForm')?.reset();
         document.getElementById('addChunkDialog')?.close();
-        showToast(`✨ Đã thêm "${created.chunk}" vào Mốc Ngày 1!`);
+        showToast(`✨ Đã thêm "${created.chunk}" (${created.ipa}) vào Mốc Ngày 1!`);
         updateHeaderUI();
         renderWorkspace();
       }
@@ -1180,7 +1336,6 @@
       reader.readAsText(file);
     },
 
-    // Two-state color-scheme toggle compliant with modern-web-guidance `dark-mode-toggle`
     toggleColorScheme: () => {
       const meta = document.querySelector('meta[name="color-scheme"]');
       if (!meta) return;
@@ -1200,7 +1355,17 @@
     }
   };
 
-  // Global keyboard shortcuts & Ctrl+V image pasting for Flashcards
+  // Global Safe Delegated Click Handler for [data-speak] buttons (Prevents quote/apostrophe bugs!)
+  document.addEventListener('click', (e) => {
+    const speakBtn = e.target.closest?.('[data-speak]');
+    if (speakBtn) {
+      e.stopPropagation();
+      const text = speakBtn.getAttribute('data-speak');
+      const rate = parseFloat(speakBtn.getAttribute('data-rate') || '0.96');
+      if (text) Visuals.speakAmerican(text, rate);
+    }
+  });
+
   window.addEventListener('keydown', (e) => {
     if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) return;
     if (currentView === 'flashcards') {
@@ -1237,7 +1402,6 @@
     }
   });
 
-  // Sync color-scheme across tabs per `dark-mode-toggle` guidance
   window.addEventListener('storage', (e) => {
     if (e.key === 'color-scheme') {
       const meta = document.querySelector('meta[name="color-scheme"]');
@@ -1246,7 +1410,6 @@
   });
 
   document.addEventListener('DOMContentLoaded', () => {
-    // Fallback for browsers without <dialog closedby="any"> support per `light-dismiss-a-dialog`
     document.querySelectorAll('dialog[closedby="any"]').forEach(dialog => {
       if (!('closedBy' in HTMLDialogElement.prototype)) {
         dialog.addEventListener('click', (event) => {

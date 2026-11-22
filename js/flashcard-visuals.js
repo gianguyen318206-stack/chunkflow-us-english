@@ -10,14 +10,12 @@
     'something', 'someone', 'somebody', 'somewhere'
   ]);
 
-  // Color-code the internal structure of a long chunk so the brain remembers the pattern visually
   function formatChunkAnatomyHTML(chunkText) {
     const text = String(chunkText || '');
-    // Highlight "doing something" as a special V-ing slot
     const tokens = text.split(/(\s+)/);
     return tokens.map(tok => {
       if (/^\s+$/.test(tok)) return tok;
-      const clean = tok.toLowerCase().replace(/[.,?!]/g, '');
+      const clean = tok.toLowerCase().replace(/[.,?!()"'’]/g, '');
       if (SLOT_WORDS.has(clean)) {
         return `<span class="chunk-tok tok-slot">${tok}</span>`;
       }
@@ -28,54 +26,54 @@
     }).join('');
   }
 
-  // Generate an expressive instant SVG scene illustration for any chunk (0.01s offline-proof Dual-Coding visual)
   function generateInstantSceneSVG(chunkObj) {
     const icon = chunkObj?.sceneIcon || '✨';
-    const label = chunkObj?.sceneLabel || 'American English Chunk';
+    const label = (chunkObj?.sceneLabel || 'American English Chunk').replace(/[<>&"]/g, '');
     const accent = chunkObj?.sceneAccent || '#0d9488';
     const chunkText = (chunkObj?.chunk || '').replace(/[<>&"]/g, '');
+    const meaningText = (chunkObj?.meaning || '').replace(/[<>&"]/g, '');
 
     return `
       <svg class="scene-vector-svg" viewBox="0 0 480 210" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="${chunkText}">
         <defs>
           <linearGradient id="bgGrad_${chunkObj?.id || '0'}" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stop-color="${accent}" stop-opacity="0.18"/>
-            <stop offset="100%" stop-color="#6366f1" stop-opacity="0.14"/>
+            <stop offset="0%" stop-color="${accent}" stop-opacity="0.22"/>
+            <stop offset="100%" stop-color="#4f46e5" stop-opacity="0.16"/>
           </linearGradient>
         </defs>
         <rect width="480" height="210" rx="16" fill="url(#bgGrad_${chunkObj?.id || '0'})"/>
         <circle cx="410" cy="48" r="56" fill="${accent}" fill-opacity="0.12"/>
         <circle cx="72" cy="165" r="68" fill="#6366f1" fill-opacity="0.10"/>
-        <rect x="24" y="22" width="175" height="28" rx="14" fill="${accent}" fill-opacity="0.16"/>
-        <text x="38" y="41" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="700" fill="${accent}">${icon} ${label}</text>
-        <text x="240" y="112" text-anchor="middle" font-size="48">${icon}</text>
-        <text x="240" y="156" text-anchor="middle" font-family="Plus Jakarta Sans, sans-serif" font-size="16" font-weight="800" fill="currentColor">${chunkText}</text>
+        <rect x="20" y="18" width="210" height="28" rx="14" fill="${accent}" fill-opacity="0.18"/>
+        <text x="34" y="37" font-family="Plus Jakarta Sans, sans-serif" font-size="12" font-weight="700" fill="${accent}">${icon} ${label}</text>
+        <text x="240" y="102" text-anchor="middle" font-size="44">${icon}</text>
+        <text x="240" y="142" text-anchor="middle" font-family="Plus Jakarta Sans, sans-serif" font-size="17" font-weight="800" fill="currentColor">${chunkText}</text>
+        <text x="240" y="168" text-anchor="middle" font-family="Plus Jakarta Sans, sans-serif" font-size="13" font-weight="600" fill="${accent}">${meaningText}</text>
       </svg>
     `;
   }
 
-  // Curated gallery of 12 vivid real-world photography scenes for 1-click visual swapping
-  const VISUAL_GALLERY = [
-    'https://images.unsplash.com/photo-1506784983877-45594efa4cbe?auto=format&fit=crop&w=700&q=80',
-    'https://images.unsplash.com/photo-1484480974693-6ca0a78fb36b?auto=format&fit=crop&w=700&q=80',
-    'https://images.unsplash.com/photo-1513694203232-719a280e022f?auto=format&fit=crop&w=700&q=80',
-    'https://images.unsplash.com/photo-1434030216411-0b793f4b4173?auto=format&fit=crop&w=700&q=80',
-    'https://images.unsplash.com/photo-1529156069898-49953e39b3ac?auto=format&fit=crop&w=700&q=80',
-    'https://images.unsplash.com/photo-1488646953014-85cb44e25828?auto=format&fit=crop&w=700&q=80',
-    'https://images.unsplash.com/photo-1490645935967-10de6ba17061?auto=format&fit=crop&w=700&q=80',
-    'https://images.unsplash.com/photo-1517694712202-14dd9538aa97?auto=format&fit=crop&w=700&q=80',
-    'https://images.unsplash.com/photo-1522071820081-009f0129c71c?auto=format&fit=crop&w=700&q=80',
-    'https://images.unsplash.com/photo-1499750310107-5fef28a66643?auto=format&fit=crop&w=700&q=80',
-    'https://images.unsplash.com/photo-1517245386807-bb43f82c33c4?auto=format&fit=crop&w=700&q=80',
-    'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=700&q=80'
-  ];
-
-  function getNextGalleryPhoto(currentUrl) {
-    const idx = VISUAL_GALLERY.indexOf(currentUrl);
-    return VISUAL_GALLERY[(idx + 1) % VISUAL_GALLERY.length];
+  function getGalleryList() {
+    return window.PHOTO_VARIATIONS || [
+      'https://images.unsplash.com/photo-1506784983877-45594efa4cbe?auto=format&fit=crop&w=700&q=80',
+      'https://images.unsplash.com/photo-1484480974693-6ca0a78fb36b?auto=format&fit=crop&w=700&q=80',
+      'https://images.unsplash.com/photo-1513694203232-719a280e022f?auto=format&fit=crop&w=700&q=80',
+      'https://images.unsplash.com/photo-1434030216411-0b793f4b4173?auto=format&fit=crop&w=700&q=80',
+      'https://images.unsplash.com/photo-1529156069898-49953e39b3ac?auto=format&fit=crop&w=700&q=80',
+      'https://images.unsplash.com/photo-1488646953014-85cb44e25828?auto=format&fit=crop&w=700&q=80',
+      'https://images.unsplash.com/photo-1490645935967-10de6ba17061?auto=format&fit=crop&w=700&q=80',
+      'https://images.unsplash.com/photo-1517694712202-14dd9538aa97?auto=format&fit=crop&w=700&q=80',
+      'https://images.unsplash.com/photo-1522071820081-009f0129c71c?auto=format&fit=crop&w=700&q=80',
+      'https://images.unsplash.com/photo-1499750310107-5fef28a66643?auto=format&fit=crop&w=700&q=80'
+    ];
   }
 
-  // American English (en-US) Text-to-Speech player
+  function getNextGalleryPhoto(currentUrl) {
+    const list = getGalleryList();
+    const idx = list.indexOf(currentUrl);
+    return list[(idx + 1) % list.length];
+  }
+
   let cachedUSVoice = null;
 
   function pickAmericanVoice() {
@@ -83,7 +81,6 @@
     const voices = window.speechSynthesis.getVoices() || [];
     if (!voices.length) return null;
 
-    // Prefer Natural / Google / Microsoft US English voices
     const preferred = voices.find(v =>
       /en[-_]US/i.test(v.lang) && /(Natural|Google|Aria|Jenny|Guy|Samantha|Alex)/i.test(v.name)
     ) || voices.find(v => /en[-_]US/i.test(v.lang)) || voices.find(v => /^en/i.test(v.lang));
@@ -113,7 +110,6 @@
     }
   }
 
-  // Compress & convert an uploaded/pasted image File/Blob into a compact DataURL for local persistence
   function fileToDataURL(file, maxWidth = 680) {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();

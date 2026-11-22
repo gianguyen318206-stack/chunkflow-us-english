@@ -3,14 +3,25 @@
   const STORAGE_KEY = 'chunkflow_us_state_v1';
   const SRS_INTERVALS = [1, 3, 5, 7, 14, 30]; // Stage 1..6 -> Stage 7 = Mastered
 
-  let fileHandle = null; // For direct disk auto-sync via File System Access API
+  let fileHandle = null;
+  let simulatedDayOffset = 0; // Allows user to test +1d, +3d, +5d, +7d review cycles live!
+
+  function nowMs() {
+    return Date.now() + simulatedDayOffset * 86400000;
+  }
 
   function todayISO() {
-    const d = new Date();
+    const d = new Date(nowMs());
     const y = d.getFullYear();
     const m = String(d.getMonth() + 1).padStart(2, '0');
     const day = String(d.getDate()).padStart(2, '0');
     return `${y}-${m}-${day}`;
+  }
+
+  function endOfTodayMs() {
+    const d = new Date(nowMs());
+    d.setHours(23, 59, 59, 999);
+    return d.getTime();
   }
 
   function defaultState() {
@@ -102,8 +113,10 @@
         intervalDays: 0,
         dueAt: 0,
         lastReviewedAt: 0,
+        lastStageAdvanceDate: '',
         lastRating: null,
         reviewCount: 0,
+        practicedCount: 0,
         wrongCount: 0,
         starred: false,
         mySentence: '',
@@ -113,24 +126,30 @@
     return state.cards[chunkId];
   }
 
-  // Rate a flashcard according to the 1-3-5-7-14-30 cycle
-  // rating: 'forgot' (Quên -> về Ngày 1) | 'hesitant' (Hơi ngập ngừng -> giữ mốc, mai ôn) | 'mastered_step' (Nhớ bật ra ngay -> lên mốc tiếp theo)
-  function rateChunk(chunkId, rating) {
+  // Rate a flashcard according to the 1-3-5-7-14-30 cycle.
+  // Prevents premature multi-stage skipping within the same day unless forceAdvance is true or the card is currently due!
+  function rateChunk(chunkId, rating, options = {}) {
     const card = ensureCardState(chunkId);
     const chunkObj = getChunkById(chunkId);
-    const now = Date.now();
+    const now = nowMs();
+    const today = todayISO();
+    const cutoff = endOfTodayMs();
     const isFirstLearn = card.stage === 0;
+    const isCurrentlyDue = card.stage >= 1 && card.stage < 7 && card.dueAt <= cutoff;
 
     card.lastReviewedAt = now;
     card.reviewCount = (card.reviewCount || 0) + 1;
     card.lastRating = rating;
+    if (options.fromPractice) {
+      card.practicedCount = (card.practicedCount || 0) + 1;
+    }
 
     if (rating === 'forgot') {
       card.stage = 1;
       card.intervalDays = SRS_INTERVALS[0]; // Back to Day 1
       card.wrongCount = (card.wrongCount || 0) + 1;
-      // Due tomorrow (or in 4 hours for same-day reinforcement, stored as 1-day milestone)
       card.dueAt = now + SRS_INTERVALS[0] * 86400000;
+      card.lastStageAdvanceDate = today;
       if (chunkObj) {
         state.errorLog[chunkId] = {
           chunkId,
@@ -143,26 +162,33 @@
       }
       state.xp = (state.xp || 0) + 5;
     } else if (rating === 'hesitant') {
-      // Keep current stage (or move from 0 -> 1), review again in 1 day
-      if (card.stage === 0) card.stage = 1;
+      if (card.stage === 0) {
+        card.stage = 1;
+        card.lastStageAdvanceDate = today;
+      }
       card.intervalDays = SRS_INTERVALS[Math.min(card.stage - 1, SRS_INTERVALS.length - 1)];
       card.dueAt = now + 86400000; // Review tomorrow
       state.xp = (state.xp || 0) + 10;
     } else {
-      // 'easy' / Nhớ bật ra ngay -> advance along 1 -> 3 -> 5 -> 7 -> 14 -> 30 -> Mastered (7)
-      card.stage = Math.min(7, (card.stage || 0) + 1);
-      if (card.stage >= 7) {
-        card.intervalDays = 60;
-        card.dueAt = now + 60 * 86400000;
-      } else {
-        const days = SRS_INTERVALS[card.stage - 1] || 1;
-        card.intervalDays = days;
-        card.dueAt = now + days * 86400000;
+      // 'easy' -> Advance stage ONLY if new (0 -> 1), currently due today, or explicitly forced
+      const canAdvanceStage = isFirstLearn || isCurrentlyDue || options.forceAdvance || (card.lastStageAdvanceDate !== today);
+
+      if (canAdvanceStage) {
+        card.stage = Math.min(7, (card.stage || 0) + 1);
+        card.lastStageAdvanceDate = today;
+        if (card.stage >= 7) {
+          card.intervalDays = 60;
+          card.dueAt = now + 60 * 86400000;
+        } else {
+          const days = SRS_INTERVALS[card.stage - 1] || 1;
+          card.intervalDays = days;
+          card.dueAt = now + days * 86400000;
+        }
       }
       if (state.errorLog[chunkId] && card.stage >= 3) {
         delete state.errorLog[chunkId];
       }
-      state.xp = (state.xp || 0) + 15;
+      state.xp = (state.xp || 0) + (canAdvanceStage ? 15 : 5);
     }
 
     touchStudyDay(isFirstLearn ? 'learn' : 'review', 1);
@@ -191,14 +217,8 @@
     return card.starred;
   }
 
-  // Due cards calculation
   function getDueChunks() {
-    const now = Date.now();
-    // End of today so any card scheduled for today counts as due today
-    const endOfToday = new Date();
-    endOfToday.setHours(23, 59, 59, 999);
-    const cutoff = Math.max(now, endOfToday.getTime());
-
+    const cutoff = endOfTodayMs();
     return getAllChunks().filter(c => {
       const st = state.cards[c.id];
       return st && st.stage >= 1 && st.stage < 7 && st.dueAt <= cutoff;
@@ -209,21 +229,26 @@
     });
   }
 
-  // Group all learned cards by SRS stage: 1 (1d), 2 (3d), 3 (5d), 4 (7d), 5 (14d), 6 (30d), 7 (Mastered)
+  function formatDaysUntilDue(dueAt) {
+    if (!dueAt) return 'Chưa có lịch';
+    const cutoff = endOfTodayMs();
+    if (dueAt <= cutoff) return 'Đến hạn hôm nay';
+    const diffDays = Math.max(1, Math.ceil((dueAt - nowMs()) / 86400000));
+    return diffDays === 1 ? 'Ôn vào ngày mai' : `Ôn sau ${diffDays} ngày`;
+  }
+
   function getStageBreakdown() {
     const stages = {
-      1: { stage: 1, days: 1, label: 'Mốc Ngày 1', desc: 'Mới nạp • Khóa trí nhớ ngắn hạn', cards: [], dueCount: 0 },
-      2: { stage: 2, days: 3, label: 'Mốc Ngày 3', desc: 'Gợi nhớ lần 1 • Chống quên nhanh', cards: [], dueCount: 0 },
-      3: { stage: 3, days: 5, label: 'Mốc Ngày 5', desc: 'Gợi nhớ lần 2 • Ghép câu phản xạ', cards: [], dueCount: 0 },
-      4: { stage: 4, days: 7, label: 'Mốc Ngày 7', desc: 'Trí nhớ trung hạn • Đổi ngữ cảnh', cards: [], dueCount: 0 },
-      5: { stage: 5, days: 14, label: 'Mốc Ngày 14', desc: 'Trí nhớ sâu • Tự nhiên bật ra', cards: [], dueCount: 0 },
-      6: { stage: 6, days: 30, label: 'Mốc Ngày 30', desc: 'Trước ngưỡng thuộc lòng vĩnh viễn', cards: [], dueCount: 0 },
+      1: { stage: 1, days: 1, label: 'Mốc Ngày 1', desc: 'Mới nạp • Ôn lại sau 1 ngày', cards: [], dueCount: 0 },
+      2: { stage: 2, days: 3, label: 'Mốc Ngày 3', desc: 'Gợi nhớ lần 1 • Ôn sau 3 ngày', cards: [], dueCount: 0 },
+      3: { stage: 3, days: 5, label: 'Mốc Ngày 5', desc: 'Gợi nhớ lần 2 • Ôn sau 5 ngày', cards: [], dueCount: 0 },
+      4: { stage: 4, days: 7, label: 'Mốc Ngày 7', desc: 'Trí nhớ trung hạn • Ôn sau 7 ngày', cards: [], dueCount: 0 },
+      5: { stage: 5, days: 14, label: 'Mốc Ngày 14', desc: 'Trí nhớ sâu • Ôn sau 14 ngày', cards: [], dueCount: 0 },
+      6: { stage: 6, days: 30, label: 'Mốc Ngày 30', desc: 'Trước ngưỡng thuộc lòng • 30 ngày', cards: [], dueCount: 0 },
       7: { stage: 7, days: 60, label: 'Đã Thuộc Lòng 🏆', desc: 'Mastered • Phản xạ tự nhiên', cards: [], dueCount: 0 }
     };
 
-    const endOfToday = new Date();
-    endOfToday.setHours(23, 59, 59, 999);
-    const cutoff = endOfToday.getTime();
+    const cutoff = endOfTodayMs();
 
     getAllChunks().forEach(c => {
       const st = state.cards[c.id];
@@ -238,12 +263,11 @@
     return stages;
   }
 
-  // Anti-Overwhelm: Smart Reschedule when too many cards pile up after a break
   function smartRescheduleOverdue(maxPerDay = 8) {
     const due = getDueChunks();
     if (due.length <= maxPerDay) return 0;
 
-    const now = Date.now();
+    const now = nowMs();
     let moved = 0;
     due.forEach((chunk, index) => {
       if (index >= maxPerDay) {
@@ -259,15 +283,13 @@
     return moved;
   }
 
-  // Add a custom long chunk created by the user
   function addCustomChunk({ chunk, meaning, level = 'B1', topic = 'CỤM TỪ CÁ NHÂN', example = '', formula = '', customImage = '', mySentence = '' }) {
     const cleanChunk = String(chunk || '').trim();
     if (!cleanChunk) return null;
 
     const id = 'custom_' + Date.now();
-    // Auto-generate IPA from window.IPA_DICT
     const dict = window.IPA_DICT || {};
-    const words = cleanChunk.toLowerCase().replace(/[.,?!]/g, '').split(/\s+/).filter(Boolean);
+    const words = cleanChunk.toLowerCase().replace(/[.,?!()"'’]/g, '').split(/\s+/).filter(Boolean);
     const ipa = '/' + words.map(w => dict[w] || w).join(' ') + '/';
 
     const themes = window.SCENE_THEMES || [];
@@ -311,12 +333,12 @@
     };
 
     state.customChunks = [newItem, ...(state.customChunks || [])];
-    // Immediately enroll in Stage 1 (Day 1 milestone)
     const card = ensureCardState(id);
     card.stage = 1;
     card.intervalDays = 1;
-    card.dueAt = Date.now() + 86400000;
-    card.lastReviewedAt = Date.now();
+    card.dueAt = nowMs() + 86400000;
+    card.lastReviewedAt = nowMs();
+    card.lastStageAdvanceDate = todayISO();
     if (mySentence) card.mySentence = mySentence;
     if (customImage) card.customImage = customImage;
 
@@ -325,7 +347,6 @@
     return newItem;
   }
 
-  // Link a local JSON file on disk for automatic persistence (Anti-Data-Loss protection)
   async function connectLocalDiskFile() {
     if (!window.showSaveFilePicker) {
       exportBackupJSON();
@@ -380,6 +401,7 @@
     saveCustomImage,
     toggleStarChunk,
     getDueChunks,
+    formatDaysUntilDue,
     getStageBreakdown,
     smartRescheduleOverdue,
     addCustomChunk,
@@ -387,12 +409,17 @@
     exportBackupJSON,
     importBackupJSON,
     isDiskLinked: () => !!fileHandle,
+    getSimulatedDayOffset: () => simulatedDayOffset,
+    setSimulatedDayOffset: (days) => {
+      simulatedDayOffset = Math.max(0, Number(days) || 0);
+      return simulatedDayOffset;
+    },
     setActiveUnit: (unitId) => {
       state.activeUnitId = unitId;
       saveState();
     },
     markUnitCompleted: (unitId) => {
-      state.completedUnits[unitId] = Date.now();
+      state.completedUnits[unitId] = nowMs();
       saveState();
     }
   };
