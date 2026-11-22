@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <script>
+    try {
+      document.querySelector('meta[name="color-scheme"]').content = localStorage.getItem("color-scheme") ?? "light dark";
+    } catch (e) {}
+  </script>
+  <title>ChunkFlow US — Học Cụm Từ Dài Tiếng Anh Chuẩn Mỹ (A1–B2 & Flashcard Hình Ảnh 1-3-5-7)</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <!-- Compact Single-Row Top Bar -->
+  <header class="top-bar">
+    <div class="brand-group" onclick="window.App.switchView('today')" title="Về Bàn Học Hôm Nay">
+      <div class="brand-mark">CF</div>
+      <div class="brand-title">
+        <span>ChunkFlow</span>
+        <span class="us-badge">🇺🇸 US A1–B2</span>
+      </div>
+    </div>
+
+    <nav class="nav-pills" aria-label="Điều hướng chính">
+      <button class="nav-tab active" data-view="today" onclick="window.App.switchView('today')">
+        <span>🏠 Hôm nay</span>
+        <span class="nav-badge" id="navDueBadge" style="display:none;">0</span>
+      </button>
+      <button class="nav-tab" data-view="flashcards" onclick="window.App.switchView('flashcards')">
+        <span>🃏 Flashcard Hình Ảnh</span>
+      </button>
+      <button class="nav-tab" data-view="practice" onclick="window.App.switchView('practice')">
+        <span>⚡ Luyện Nhớ Nhanh</span>
+      </button>
+      <button class="nav-tab" data-view="roadmap" onclick="window.App.switchView('roadmap')">
+        <span>🗺️ Lộ Trình A1–B2</span>
+      </button>
+    </nav>
+
+    <div class="header-tools">
+      <div class="streak-chip" title="Chuỗi ngày học liên tiếp">
+        <span>🔥</span>
+        <span id="headerStreak">1 ngày</span>
+      </div>
+      <button class="btn btn-secondary btn-sm" onclick="window.App.openAddChunkDialog()" title="Tự thêm cụm từ mới của riêng bạn">
+        ➕ Thêm cụm
+      </button>
+      <button class="btn btn-ghost btn-sm" onclick="window.App.toggleColorScheme()" aria-label="Đổi giao diện Sáng / Tối" title="Đổi chế độ Sáng / Tối">
+        🌓
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Workspace -->
+  <main class="workspace" id="workspaceMain"></main>
+
+  <!-- Native Light-Dismiss Dialog for Adding Custom Long Chunks -->
+  <dialog id="addChunkDialog" closedby="any" aria-labelledby="addChunkTitle">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+      <h2 id="addChunkTitle" style="margin:0;font-size:19px;font-weight:800;">✨ Thêm Cụm Từ Dài Của Riêng Tôi</h2>
+      <button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById('addChunkDialog').close()">✕</button>
+    </div>
+    <form id="addChunkForm" onsubmit="window.App.submitNewChunk(event)">
+      <div class="form-field">
+        <label for="newChunkPhrase">Cụm từ dài tiếng Anh (Long Chunk / Collocation) *</label>
+        <input type="text" id="newChunkPhrase" class="text-input" required placeholder="Ví dụ: make up my mind to do something">
+      </div>
+      <div class="form-field">
+        <label for="newChunkMeaning">Nghĩa tiếng Việt dễ nhớ nhất với bạn *</label>
+        <input type="text" id="newChunkMeaning" class="text-input" required placeholder="Ví dụ: quyết tâm / đưa ra quyết định làm gì">
+      </div>
+      <div class="form-field">
+        <label for="newChunkLevel">Chặng trình độ (A1 – B2)</label>
+        <select id="newChunkLevel" class="text-input">
+          <option value="A1">🌱 A1 — Nền tảng sinh hoạt</option>
+          <option value="A2">🌿 A2 — Giao tiếp đời sống</option>
+          <option value="B1" selected>🌳 B1 — Phản xạ & Nêu quan điểm</option>
+          <option value="B2">🌲 B2 — Chuyên nghiệp & Thành ngữ Mỹ</option>
+        </select>
+      </div>
+      <div class="form-field">
+        <label for="newChunkExample">Câu ví dụ gắn với bản thân bạn</label>
+        <input type="text" id="newChunkExample" class="text-input" placeholder="Ví dụ: I finally made up my mind to practice English every morning.">
+      </div>
+      <div class="form-field">
+        <label for="newChunkImage">Link hình ảnh mặt sau Flashcard (Tùy chọn)</label>
+        <input type="url" id="newChunkImage" class="text-input" placeholder="https://... (để trống hệ thống sẽ tự chọn ảnh tình huống)">
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:18px;">
+        <button type="button" class="btn btn-secondary" onclick="document.getElementById('addChunkDialog').close()">Hủy</button>
+        <button type="submit" class="btn btn-primary">➕ Lưu & Đưa vào Mốc Ngày 1</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div class="toast-notice" id="toastNotice" role="status" aria-live="polite"></div>
+
+  <script src="js/data-roadmap.js"></script>
+  <script src="js/srs-engine.js"></script>
+  <script src="js/flashcard-visuals.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
